@@ -1,0 +1,65 @@
+name: PO3 15m Scanner
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"        # every 15 minutes, UTC (GitHub may start runs late or skip some under load)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Scan without sending Telegram messages"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write                 # needed to push the 'state' branch
+
+concurrency:
+  group: po3-scanner              # never run two scans at once; queued run waits (no cancel)
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      STATE_DB_PATH: state_repo/state.db
+      STATE_SHA_FILE: .state_sha
+      STATE_SYNC_CHECKPOINT: "1"   # push ledger state right before/after each Telegram send
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TWELVE_DATA_API_KEY_1: ${{ secrets.TWELVE_DATA_API_KEY_1 }}
+      TWELVE_DATA_API_KEY_2: ${{ secrets.TWELVE_DATA_API_KEY_2 }}
+      TWELVE_DATA_API_KEY_3: ${{ secrets.TWELVE_DATA_API_KEY_3 }}
+      TWELVE_DATA_API_KEY_4: ${{ secrets.TWELVE_DATA_API_KEY_4 }}
+      TWELVE_DATA_API_KEY_GOLD: ${{ secrets.TWELVE_DATA_API_KEY_GOLD }}   # optional, dedicated XAU/USD key
+      OANDA_API_TOKEN: ${{ secrets.OANDA_API_TOKEN }}                      # optional, XAUUSD / NAS100 CFD
+      ALGOSPECIAL_UTC_OFFSET_HOURS: ${{ vars.ALGOSPECIAL_UTC_OFFSET_HOURS }}  # optional repo variable (verified offset)
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore persistent state (branch 'state')
+        id: restore
+        run: python state_sync.py restore        # fails the run if the branch exists but cannot be read
+
+      - name: Run scanner
+        run: python main.py
+
+      - name: Save persistent state
+        if: always() && steps.restore.outcome == 'success'
+        run: python state_sync.py push           # --force-with-lease: refuses to overwrite a newer state
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-report
+          path: reports/
+          retention-days: 7

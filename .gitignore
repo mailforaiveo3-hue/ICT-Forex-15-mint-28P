@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+state/
+state_repo/
+reports/*
+!reports/.gitkeep
+.pytest_cache/
